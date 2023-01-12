@@ -1,0 +1,164 @@
+Description: >
+  Raphael Okeibunor / Udagram CloudFormation 2023
+  This template creates an IAM role, Instance Profile, two security groups for the Load balancer and the Web Servers, 
+  Launch Template for the EC2 instance used by the Autoscaling group.
+  It also deploys the  AutoScaling group and web server load balancer and attaches it to both public subnets.
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+  LaunchTemplateVersionNumber:
+    Description: Version number for the launch template used when creating EC2 instances
+    Type: String
+    Default: 1
+
+Resources:
+  # instance profile and also the IAM Role that we want to associate to our auto scaling EC2 Servers
+  WebServerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Description: IAM role to be assigned to the EC2 instances
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      PermissionsBoundary: arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+      RoleName: UdagramS3ReadOnlyRoleForEC2
+  ProfileWithRolesForMyServer:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WebServerRole
+  LBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to our load balancer
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+  WebServerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to our hosts
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+  WebServerLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    DependsOn: WebServerSecGroup
+    Properties:
+      LaunchTemplateName: !Sub ${AWS::StackName}-launch-template
+      LaunchTemplateData:
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            apt-get update -y
+            apt-get install apache2 -y
+            systemctl start apache2.service
+            cd /var/www/html
+            echo "Udacity Demo Web Server Up and Running!" > index.html
+        ImageId: ami-00ddb0e5626798373
+        SecurityGroupIds:
+          - !Ref WebServerSecGroup
+        IamInstanceProfile:
+          Arn: !GetAtt
+            - ProfileWithRolesForMyServer
+            - Arn
+        InstanceType: t3.small
+        BlockDeviceMappings:
+          - DeviceName: "/dev/sdk"
+            Ebs:
+              VolumeSize: "10"
+              DeleteOnTermination: true
+  WebServerGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      HealthCheckGracePeriod: 5
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PRIV-NETS"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebServerLaunchTemplate
+        Version: !Ref LaunchTemplateVersionNumber
+      MinSize: "0"
+      MaxSize: "4"
+      DesiredCapacity: "4"
+      TargetGroupARNs:
+        - Ref: WebServerTargetGroup
+  WebServerLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PUB1-SN"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PUB2-SN"
+      SecurityGroups:
+        - Ref: LBSecGroup
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: WebServerTargetGroup
+      LoadBalancerArn:
+        Ref: WebServerLB
+      Port: 80
+      Protocol: HTTP
+  LBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref "WebServerTargetGroup"
+      Conditions:
+        - Field: path-pattern
+          Values: [/]
+      ListenerArn: !Ref "Listener"
+      Priority: 1
+  WebServerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "${EnvironmentName}-VPCID"
+
+### OUTPUTS ###
+Outputs:
+  WebServerLBURL:
+    Description: The Load balancer URL
+    Value: !Join ["", [http://, !GetAtt WebServerLB.DNSName]]
+    Export:
+      Name: !Sub ${EnvironmentName}-Load-Balancer-URL
