@@ -12,7 +12,7 @@ Make sure git and AWS cli installed and configured on your system,open your term
 - Change directory using the command `cd udagram_cloudformation`
 - Create the network using the command `./create.sh <stack-name> network.yml network-params.json`
 - Then create the server respources using the command `./create.sh <another-stack-name> servers.yml servers-params.json`
-- Now you can play with the infrastructure using the update.sh file using the command above but replacing the `./create.sh` with `./update.sh`
+- Now you can play with the infrastructure using the update.sh file using the commands above but replacing the `./create.sh` with `./update.sh`
 - Delete the infrastructure using the command `./delete.sh <stack name>`
 - The Region is set to `us-east-1` by default, you can change it in all the `.sh` files
 
